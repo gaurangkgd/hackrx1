@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 
 # FastAPI imports
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, File, UploadFile, Form
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, validator
@@ -94,6 +94,11 @@ class QueryResponse(BaseModel):
     answers: List[str] = Field(..., description="List of answers corresponding to the questions")
     metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
 
+class FileUploadResponse(BaseModel):
+    answers: List[str] = Field(..., description="List of answers corresponding to the questions")
+    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Additional metadata")
+    filename: str = Field(..., description="Name of the uploaded file")
+
 # Custom Gemini LLM class
 class GeminiLLM(LLM):
     model_name: str = "gemini-2.5-flash-lite"
@@ -121,6 +126,53 @@ class GeminiLLM(LLM):
 
 # Document processing utilities
 class DocumentProcessor:
+    @staticmethod
+    async def save_uploaded_file(upload_file: UploadFile) -> str:
+        """Save uploaded file and return local path"""
+        try:
+            # Validate file type
+            allowed_extensions = ['.pdf', '.docx', '.doc', '.eml', '.msg', '.txt']  # Added .txt for testing
+            file_extension = Path(upload_file.filename).suffix.lower()
+            
+            if upload_file.content_type not in [
+                'application/pdf', 
+                'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                'application/msword',
+                'message/rfc822',
+                'application/octet-stream',  # For .eml files
+                'text/plain'  # Added for testing
+            ] and file_extension not in allowed_extensions:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Unsupported file type. Allowed: {', '.join(allowed_extensions)}"
+                )
+            
+            # Check file size (50MB limit)
+            if upload_file.size and upload_file.size > Config.MAX_FILE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"File too large. Maximum size: {Config.MAX_FILE_SIZE // (1024*1024)}MB"
+                )
+            
+            # Create temporary file
+            temp_dir = tempfile.mkdtemp()
+            file_extension = Path(upload_file.filename).suffix or '.pdf'
+            temp_file = os.path.join(temp_dir, f"uploaded_document{file_extension}")
+            
+            # Save file
+            with open(temp_file, 'wb') as f:
+                content = await upload_file.read()
+                f.write(content)
+            
+            logger.info(f"Uploaded file saved to: {temp_file}")
+            return temp_file
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error saving uploaded file: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to save uploaded file: {str(e)}")
+
     @staticmethod
     async def download_document(url: str) -> str:
         """Download document from URL and return local path"""
@@ -212,9 +264,25 @@ class DocumentProcessor:
             logger.error(f"Error loading email: {str(e)}")
             raise HTTPException(status_code=400, detail=f"Failed to load email: {str(e)}")
 
+    @staticmethod
+    def load_text(file_path: str) -> List[Any]:
+        """Load text document"""
+        try:
+            from langchain.schema import Document as LangchainDocument
+            
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            documents = [LangchainDocument(page_content=content, metadata={"source": file_path})]
+            logger.info(f"Loaded text document")
+            return documents
+        except Exception as e:
+            logger.error(f"Error loading text file: {str(e)}")
+            raise HTTPException(status_code=400, detail=f"Failed to load text file: {str(e)}")
+
     @classmethod
     async def process_document(cls, url: str) -> List[Any]:
-        """Process document based on file type"""
+        """Process document based on file type from URL"""
         file_path = await cls.download_document(url)
         
         try:
@@ -226,6 +294,39 @@ class DocumentProcessor:
                 return cls.load_docx(file_path)
             elif file_extension in ['.eml', '.msg']:
                 return cls.load_email(file_path)
+            elif file_extension == '.txt':
+                return cls.load_text(file_path)
+            else:
+                # Try to load as PDF by default
+                return cls.load_pdf(file_path)
+                
+        finally:
+            # Cleanup temporary file
+            try:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    temp_dir = os.path.dirname(file_path)
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir)
+            except Exception as e:
+                logger.warning(f"Failed to cleanup temporary files: {str(e)}")
+
+    @classmethod
+    async def process_uploaded_file(cls, upload_file: UploadFile) -> List[Any]:
+        """Process uploaded file"""
+        file_path = await cls.save_uploaded_file(upload_file)
+        
+        try:
+            file_extension = Path(file_path).suffix.lower()
+            
+            if file_extension == '.pdf':
+                return cls.load_pdf(file_path)
+            elif file_extension in ['.doc', '.docx']:
+                return cls.load_docx(file_path)
+            elif file_extension in ['.eml', '.msg']:
+                return cls.load_email(file_path)
+            elif file_extension == '.txt':
+                return cls.load_text(file_path)
             else:
                 # Try to load as PDF by default
                 return cls.load_pdf(file_path)
@@ -454,6 +555,97 @@ async def run_hackrx(
         raise
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.post("/hackrx/upload", response_model=FileUploadResponse)
+async def run_hackrx_upload(
+    file: UploadFile = File(..., description="Document file to process (PDF, DOCX, DOC, EML, MSG)"),
+    questions: str = Form(..., description="JSON string containing list of questions"),
+    token: str = Depends(verify_token)
+) -> FileUploadResponse:
+    """
+    Endpoint for processing uploaded files and answering questions
+    """
+    try:
+        # Parse questions from JSON string
+        try:
+            import json
+            questions_list = json.loads(questions)
+            if not isinstance(questions_list, list) or len(questions_list) == 0:
+                raise ValueError("Questions must be a non-empty list")
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid questions format: {str(e)}")
+        
+        logger.info(f"Processing uploaded file '{file.filename}' with {len(questions_list)} questions")
+        
+        # Initialize QA system
+        qa_system = IntelligentQASystem()
+        
+        # Process uploaded document
+        logger.info("Processing uploaded document...")
+        documents = await DocumentProcessor.process_uploaded_file(file)
+        
+        if not documents:
+            raise HTTPException(status_code=400, detail="No documents could be processed from uploaded file")
+        
+        # Create vector store
+        logger.info("Creating vector store...")
+        vectorstore = qa_system.create_embeddings(documents)
+        
+        # Setup QA chain
+        logger.info("Setting up QA chain...")
+        qa_chain = qa_system.setup_qa_chain(vectorstore)
+        
+        # Process questions
+        logger.info("Processing questions...")
+        answers = []
+        
+        for i, question in enumerate(questions_list):
+            try:
+                logger.info(f"Processing question {i+1}/{len(questions_list)}: {question[:50]}...")
+                
+                result = qa_chain({"question": question})
+                answer = result["answer"].strip()
+                
+                # Ensure answer is a single comprehensive sentence
+                if not answer.endswith('.'):
+                    answer += '.'
+                
+                answers.append(answer)
+                logger.info(f"Answer {i+1} generated successfully")
+                
+            except Exception as e:
+                logger.error(f"Error processing question {i+1}: {str(e)}")
+                answers.append("I apologize, but I could not process this question due to an error.")
+        
+        # Cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        
+        logger.info("File upload request processing completed successfully")
+        
+        return FileUploadResponse(
+            answers=answers,
+            filename=file.filename,
+            metadata={
+                "filename": file.filename,
+                "file_size": file.size,
+                "content_type": file.content_type,
+                "total_questions": len(questions_list),
+                "processing_timestamp": datetime.now().isoformat(),
+                "model_info": {
+                    "llm": "gemini-2.5-flash-lite",
+                    "embeddings": "sentence-transformers/all-MiniLM-L6-v2",
+                    "vectorstore": "FAISS"
+                }
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in file upload: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # Error handlers

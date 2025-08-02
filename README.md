@@ -8,11 +8,14 @@ This is a comprehensive solution for the HackRX 5.0 hackathon challenge, impleme
 
 ### Core Capabilities
 - **Multi-format Document Processing**: Supports PDF, DOCX, and email documents
+- **Dual Input Methods**: Process documents via URL or direct file upload
+- **File Upload Support**: Upload local files (PDF, DOCX, DOC, EML, MSG) up to 50MB
 - **Semantic Search**: FAISS-based vector embeddings for efficient document retrieval  
 - **LLM Integration**: Google Gemini 2.5 Flash Lite for intelligent response generation
 - **RESTful API**: FastAPI-based service with proper authentication
 - **Contextual Q&A**: Handles complex queries with explainable reasoning
 - **Real-time Processing**: Optimized for low-latency responses
+- **Interactive Testing**: Web interface and comprehensive test suites
 
 ### Technical Specifications
 - **Embeddings**: Sentence Transformers (all-MiniLM-L6-v2)
@@ -25,16 +28,23 @@ This is a comprehensive solution for the HackRX 5.0 hackathon challenge, impleme
 
 ```
 hackrx/
-├── app.py                 # Main FastAPI application
-├── main.py               # Original chatbot with enhancements
-├── config.py             # Configuration settings
-├── test_api.py           # API testing script
-├── start_server.py       # Server startup script
-├── requirements.txt      # Python dependencies
-├── README.md            # This documentation
-├── myenv/               # Python virtual environment
-├── pdf_documents/       # Document storage directory
-└── pdf_vectorstore/     # Vector store cache
+├── app.py                      # Main FastAPI application with URL & file upload endpoints
+├── main.py                     # Original chatbot with enhancements
+├── config.py                   # Configuration settings
+├── test_api.py                 # API testing script for URL endpoint
+├── test_file_upload.py         # API testing script for file upload endpoint
+├── file_upload_test.html       # Web interface for testing file uploads
+├── demo_both_endpoints.py      # Demo script showing both URL and file upload
+├── client_example.py           # Python client examples and integration guide
+├── start_server.py             # Server startup script
+├── validate.py                 # System validation script
+├── demo.py                     # Demo script with sample data
+├── requirements.txt            # Python dependencies
+├── README.md                   # This documentation
+├── .env                        # Environment variables (API keys)
+├── myenv/                      # Python virtual environment
+├── pdf_documents/              # Document storage directory
+└── pdf_vectorstore/            # Vector store cache
 ```
 
 ## 🛠 Installation & Setup
@@ -101,7 +111,7 @@ Authorization: Bearer 02b1ad646a69f58d41c75bb9ea5f78bbaf30389258623d713ff4115b55
 GET /health
 ```
 
-#### 2. Main Processing Endpoint
+#### 2. Document Processing via URL
 ```http
 POST /hackrx/run
 Content-Type: application/json
@@ -119,7 +129,26 @@ Request Body:
 }
 ```
 
-Response:
+#### 3. Document Processing via File Upload
+```http
+POST /hackrx/upload
+Content-Type: multipart/form-data
+Authorization: Bearer {token}
+```
+
+Form Data:
+- `file`: Document file (PDF, DOCX, DOC, EML, MSG - Max 50MB)
+- `questions`: JSON string containing array of questions
+
+Example using curl:
+```bash
+curl -X POST "http://localhost:8000/hackrx/upload" \
+  -H "Authorization: Bearer your-token-here" \
+  -F "file=@document.pdf" \
+  -F 'questions=["What is the grace period?", "What are the coverage limits?"]'
+```
+
+#### 4. Response Format (Both Endpoints)
 ```json
 {
   "answers": [
@@ -127,7 +156,8 @@ Response:
     "The coverage limit is set at $100,000 per incident with annual aggregate limits."
   ],
   "metadata": {
-    "document_url": "https://example.com/document.pdf",
+    "document_url": "https://example.com/document.pdf",  // For URL endpoint
+    "filename": "document.pdf",                          // For upload endpoint
     "total_questions": 2,
     "processing_timestamp": "2025-08-01T10:30:00",
     "model_info": {
@@ -147,8 +177,37 @@ Response:
 
 ### Automated Testing
 ```powershell
-# Run comprehensive test suite
+# Test URL-based endpoint
 python test_api.py
+
+# Test file upload endpoint
+python test_file_upload.py
+```
+
+### Interactive Testing
+- **Web Interface**: Open `file_upload_test.html` in your browser
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+### Manual Testing Examples
+
+#### URL Endpoint
+```bash
+curl -X POST "http://localhost:8000/hackrx/run" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-token" \
+  -d '{
+    "documents": "https://example.com/document.pdf",
+    "questions": ["What is the grace period?"]
+  }'
+```
+
+#### File Upload Endpoint
+```bash
+curl -X POST "http://localhost:8000/hackrx/upload" \
+  -H "Authorization: Bearer your-token" \
+  -F "file=@sample.pdf" \
+  -F 'questions=["What is the grace period?"]'
 ```
 
 ## 🎯 System Architecture
@@ -199,9 +258,16 @@ python test_api.py
 
 ## 🚀 Quick Start Guide
 
+### Method 1: URL-based Processing
 1. **Activate Environment**: `myenv\Scripts\activate`
 2. **Start Server**: `python start_server.py`
-3. **Test API**: `python test_api.py`
+3. **Test URL API**: `python test_api.py`
 4. **Access Docs**: http://localhost:8000/docs
+
+### Method 2: File Upload Processing
+1. **Activate Environment**: `myenv\Scripts\activate`
+2. **Start Server**: `python start_server.py`
+3. **Test File Upload**: `python test_file_upload.py` (with local PDF)
+4. **Web Interface**: Open `file_upload_test.html` in browser
 
 **Ready for HackRX 5.0 submission! 🚀**
