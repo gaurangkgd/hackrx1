@@ -2,14 +2,11 @@ langchain-community
 pypdf
 langchain-huggingface
 faiss-cpu
-torch
-tqdm
 google-generativeai
-typing
 pydantic
-sentence-transformers
 fastapi
 uvicorn
+gunicorn
 python-multipart
 requests
 python-docx
@@ -20,7 +17,4 @@ python-dotenv
 langchain
 langchain-core
 langchain-text-splitters
-email-validator
-transformers
-numpy
-scikit-learn
+sentence-transformers
