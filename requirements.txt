@@ -2,13 +2,8 @@ langchain-community
 pypdf
 langchain-huggingface
 faiss-cpu
-torch
-tqdm
 google-generativeai
-typing
 pydantic
-tf-keras
-sentence-transformers
 fastapi
 uvicorn
 python-multipart
@@ -18,3 +13,4 @@ aiohttp
 nest-asyncio
 lxml
 python-dotenv
+sentence-transformers
