@@ -20,3 +20,7 @@ python-dotenv
 langchain
 langchain-core
 langchain-text-splitters
+email-validator
+transformers
+numpy
+scikit-learn
